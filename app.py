@@ -28,11 +28,11 @@ def load_and_train():
     cat_imp = SimpleImputer(strategy="most_frequent")
     df[categorical_cols] = cat_imp.fit_transform(df[categorical_cols])
 
-    # 4. Encoding
-    le = LabelEncoder()
-    df["Loan_Approved"] = le.fit_transform(df["Loan_Approved"])
+    # 4. Encoding Target Variable (Crucial Fix)
+    le_target = LabelEncoder()
+    df["Loan_Approved"] = le_target.fit_transform(df["Loan_Approved"])
     
-    # Label encode Education_Level specifically, as done in your notebook
+    # Encode Education_Level specifically
     le_edu = LabelEncoder()
     df["Education_Level"] = le_edu.fit_transform(df["Education_Level"])
 
@@ -62,11 +62,11 @@ def load_and_train():
     nb_model = GaussianNB()
     nb_model.fit(x_scaled, y)
 
-    return nb_model, scaler, le_edu, ohe, cols_to_ohe, x.columns, cat_options
+    return nb_model, scaler, le_edu, le_target, ohe, cols_to_ohe, x.columns, cat_options
 
 # Execute the training and extract the rules/options
 try:
-    model, scaler, le_edu, ohe, cols_to_ohe, feature_columns, cat_options = load_and_train()
+    model, scaler, le_edu, le_target, ohe, cols_to_ohe, feature_columns, cat_options = load_and_train()
 except Exception as e:
     st.error(f"Error loading and training model: {e}")
     st.stop()
@@ -81,11 +81,11 @@ st.sidebar.header("Applicant Information")
 def get_opts(col_name, default):
     return cat_options.get(col_name, default)
 
-# UI Inputs (Dropdowns now perfectly match your CSV data)
-app_income = st.sidebar.number_input("Applicant Income", min_value=0.0, value=50000.0)
+# UI Inputs (Adjusted defaults to be closer to normal statistical averages)
+app_income = st.sidebar.number_input("Applicant Income", min_value=0.0, value=5000.0)
 credit_score = st.sidebar.number_input("Credit Score", min_value=300.0, max_value=850.0, value=700.0)
 dti_ratio = st.sidebar.number_input("DTI Ratio", min_value=0.0, max_value=1.0, value=0.3)
-savings = st.sidebar.number_input("Savings", min_value=0.0, value=10000.0)
+savings = st.sidebar.number_input("Savings", min_value=0.0, value=2000.0)
 
 gender = st.sidebar.selectbox("Gender", get_opts("Gender", ["Male", "Female"]))
 education = st.sidebar.selectbox("Education Level", get_opts("Education_Level", ["Graduate", "Not Graduate"]))
@@ -112,7 +112,7 @@ if st.sidebar.button("Predict Loan Status"):
     })
 
     try:
-        # 2. Apply Label Encoding for Education Level exactly as in training
+        # 2. Apply Label Encoding for Education Level
         input_data["Education_Level"] = le_edu.transform(input_data["Education_Level"])
         
         # 3. Apply One Hot Encoding
@@ -122,28 +122,39 @@ if st.sidebar.button("Predict Loan Status"):
         # Combine base data with OHE data
         input_data = pd.concat([input_data.drop(columns=cols_to_ohe), encoded_input_df], axis=1)
 
-        # 4. Feature Engineering (Apply exact same math as training)
+        # 4. Feature Engineering
         input_data["DTI_Ratio_sq"] = input_data["DTI_Ratio"]**2
         input_data["Credit_Score_sq"] = input_data["Credit_Score"]**2
 
         # Drop original columns
         input_data = input_data.drop(columns=["Credit_Score", "DTI_Ratio"], errors='ignore')
         
-        # 5. STRICT ALIGNMENT: Force the input dataframe to have the exact columns in the exact order as training
+        # 5. STRICT ALIGNMENT: Force exact columns
         input_data = input_data.reindex(columns=feature_columns, fill_value=0)
 
         # 6. Scale
         input_scaled = scaler.transform(input_data)
 
-        # 7. Predict
-        prediction = model.predict(input_scaled)
+        # 7. Predict & Get Probability
+        pred_label = model.predict(input_scaled)[0]
+        probabilities = model.predict_proba(input_scaled)[0]
+        confidence = max(probabilities) * 100
+        
+        # Decode the prediction back to its original string (e.g., "Y" or "Yes")
+        pred_string = le_target.inverse_transform([pred_label])[0]
         
         st.subheader("Prediction Result")
-        if prediction[0] == 1:
-            st.success("🎉 Loan Approved!")
+        
+        # Check if the predicted string indicates an approval
+        positive_responses = ['yes', 'y', 'approved', 'approve', 'true', '1']
+        
+        if str(pred_string).strip().lower() in positive_responses:
+            st.success(f"🎉 Loan Approved! (Original Label: '{pred_string}')")
+            st.write(f"**Model Confidence:** {confidence:.2f}%")
             st.balloons()
         else:
-            st.error("❌ Loan Denied.")
+            st.error(f"❌ Loan Denied. (Original Label: '{pred_string}')")
+            st.write(f"**Model Confidence:** {confidence:.2f}%")
             
     except Exception as e:
         st.error(f"An error occurred during prediction formatting: {e}")
